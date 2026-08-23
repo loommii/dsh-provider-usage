@@ -4,6 +4,9 @@
   "description": "DSH 插件：悬浮鲸鱼点击弹出 OpenCode Go 用量查询（M1 最简版，对齐 cc-switch 查询语义）",
   "type": "module",
   "main": "lib/index.js",
+  "scripts": {
+    "test": "node tests/host.test.mjs && node tests/smoke.mjs"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
