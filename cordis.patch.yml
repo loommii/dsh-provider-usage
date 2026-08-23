@@ -1,0 +1,7 @@
+# dsh-provider-usage M1: 插入插件行（自动 reconcile 进 profile bundles）
+- insert:
+    - id: provider-usage
+      name: dsh-provider-usage
+      config:
+        baseUrl: https://opencode.ai/zen/go   # {{baseUrl}}/v1/usage 即官方 usage 接口
+        timeoutMs: 15000
