@@ -19,6 +19,21 @@ dsh plugin --profile web add file:/path/to/dsh-provider-usage
 
 然后重启 `dsh web`。
 
+## 设置（设置 → 「OpenCode Go 用量」）
+
+| 设置项 | 说明 | 生效方式 |
+|---|---|---|
+| 显示悬浮鲸鱼 | 显示/隐藏 🐳 | 即时 |
+| z-index（层级） | 默认 2147483000（与 DSH 官方宠物一致）；面板打开时 🐳 自动降到面板之下 | 即时 |
+| 鲸鱼尺寸 | 32–160px | 即时 |
+| 面板自动刷新间隔 | 15s / 30s / 60s / 2min | 即时 |
+| 重置到右下角 | 清除位置记忆，回到默认（right:24 / bottom:120） | 即时 |
+| 恢复默认设置 | 全部恢复 + 位置重置 | 即时 |
+| 当前状态 | 数据源、凭证来源（掩码）、最近 HTTP 状态、更新时间 | 即时 |
+
+设置保存在**本机浏览器 localStorage**（`dsh-provider-usage.settings`），改动即时生效、无需重启。
+`baseUrl` / `timeoutMs` 仍属于 Host 配置，需改 `cordis.patch.yml` 并重启。
+
 ## 密钥来源（按序）
 
 1. DSH 设置 → `llm-pi-ai.providers['opencode-go'].apiKeyEnv` 声明的凭证引用（默认 `OPENCODE_GO_API_KEY`）

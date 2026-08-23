@@ -1,6 +1,6 @@
 {
   "name": "dsh-provider-usage",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH 插件：悬浮鲸鱼点击弹出 OpenCode Go 用量查询（M1 最简版，对齐 cc-switch 查询语义）",
   "type": "module",
   "main": "lib/index.js",
