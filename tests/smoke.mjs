@@ -3,7 +3,7 @@
 // the outbound call fails; we assert the result shape and failure semantics.
 import { apply, name, inject } from '../lib/index.js'
 
-let captured = null
+const capturedRoutes = []
 const ctx = {
   settings: {
     get: () => ({ providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' } } }),
@@ -12,7 +12,7 @@ const ctx = {
   get: () => undefined,
   logger: { warn: () => {} },
   webServer: {
-    register: (route) => { captured = route; return () => {} },
+    register: (route) => { capturedRoutes.push(route); return () => {} },
   },
   // cordis effect 立即执行回调并返回 dispose
   effect: (fn) => { (fn || (() => {}))() },
@@ -22,7 +22,10 @@ apply(ctx, { baseUrl: 'https://opencode.ai/zen/go', timeoutMs: 4000 })
 
 if (name !== 'provider-usage') throw new Error('name mismatch')
 if (!inject.includes('webServer')) throw new Error('inject mismatch')
-if (!captured || captured.path !== '/api/provider-usage/opencode-go') throw new Error('route not mounted')
+const captured = capturedRoutes.find((r) => r.path === '/api/provider-usage/opencode-go')
+if (!captured) throw new Error('route not mounted')
+const assetRoute = capturedRoutes.find((r) => r.path.includes('/asset/whale-refined/'))
+if (!assetRoute) throw new Error('asset route not mounted')
 
 const req = { method: 'GET', socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:3080' } }
 let bodyText = null
@@ -65,4 +68,11 @@ console.log('extra:', JSON.stringify(okJson.extra))
 if (!okJson.ok || okJson.remaining !== 87 || okJson.windows.rolling.usedPct !== 9) throw new Error('parse semantics mismatch')
 if (!/5小时: 91%/.test(okJson.extra) || !/7天: 88%/.test(okJson.extra)) throw new Error('extra text mismatch')
 globalThis.fetch = realFetch
+
+// ── 场景 3：资产路由（非回环 403）──
+let assetText = null
+const aRes = { writeHead: (c, h) => { aRes.code = c }, end: (t) => { assetText = t } }
+await assetRoute.handler({ method: 'GET', socket: { remoteAddress: '10.0.0.8' }, headers: { host: '127.0.0.1' } }, aRes)
+if (aRes.code !== 403) throw new Error('asset route loopback guard failed')
+console.log('asset-route guard status:', aRes.code)
 console.log('SMOKE OK')

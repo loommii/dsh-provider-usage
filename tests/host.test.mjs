@@ -13,6 +13,7 @@ function assert(cond, name, extra) {
 const realNow = Date.now.bind(Date)
 function mount(overrides = {}) {
   let route = null
+  const routes = []
   let fetchCount = 0
   let now = Date.now()
   globalThis.Date.now = () => now
@@ -21,11 +22,13 @@ function mount(overrides = {}) {
     credentials: { resolve: async () => ({ value: 'sk-test-abcdef123456' }) },
     get: () => undefined,
     logger: { warn: () => {} },
-    webServer: { register: (r) => { route = r; return () => {} } },
+    webServer: { register: (r) => { routes.push(r); return () => {} } },
     effect: (fn) => { fn() },
     ...overrides,
   }
   apply(ctx, { baseUrl: 'https://opencode.ai/zen/go', timeoutMs: 5000 })
+  route = routes.find((r) => r.path === '/api/provider-usage/opencode-go')
+  if (!route) throw new Error('usage route not registered')
   async function call(remote = '127.0.0.1', stub, method = 'GET', host = '127.0.0.1:3080') {
     if (stub) globalThis.fetch = stub
     let text = null

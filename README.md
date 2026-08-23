@@ -3,6 +3,7 @@
 DSH Web GUI 插件 · **最简版**：右下角悬浮鲸鱼 🐳，点击弹出「OpenCode Go 用量」对话框。
 
 - 查询语义对齐 cc-switch 的使用量查询脚本（`{{baseUrl}}/v1/usage` + Bearer key）
+- 悬浮鲸鱼为 **鲸鱼娘（精致版）** 精灵动画（idle 循环 + 点击挥手），资产来自 dsh-pet（MIT，见 ASSETS-NOTICE.md）
 - 点击时查询，Host 侧 30 秒缓存复用；面板打开期间每 30 秒自动刷新
 - 显示：每月剩余 %（大数字）+ 5小时/7天/每月三窗口进度条 + 重置倒计时 + cc-switch 同款 summary 文案
 - 回环路由防护、凭证只经 DSH 凭证层解析（不落副本）、key 掩码展示
