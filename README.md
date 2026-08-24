@@ -1,6 +1,6 @@
 # dsh-provider-usage (M1)
 
-DSH Web GUI 插件 · **最简版**：右下角悬浮鲸鱼 🐳，点击弹出「OpenCode Go 用量」对话框。
+DSH Web GUI 插件 · **最简版**：右下角悬浮鲸鱼 🐳，点击弹出「用量中心」对话框。
 
 - 查询语义对齐 cc-switch 的使用量查询脚本（`{{baseUrl}}/v1/usage` + Bearer key）
 - 悬浮鲸鱼为 **鲸鱼娘（精致版）** 精灵动画（idle 循环 + 点击挥手），资产来自 dsh-pet（MIT，见 ASSETS-NOTICE.md）
@@ -22,15 +22,12 @@ dsh plugin --profile web add file:/path/to/dsh-provider-usage
 
 ## 版本规范（自 v0.2.0 起）
 
-- 语义化版本 `MAJOR.MINOR.PATCH`：
-  - **PATCH**：缺陷修复（悬空、越界、遮挡等）
-  - **MINOR**：新功能（设置页、精灵动画、挂载方式、样式重构等）
-  - **MAJOR**：破坏性变更 / 里程碑发布
-- 发布流程：本地开发 → 本地验收 → 提交推送 → 打 tag（`vMAJOR.MINOR.PATCH`）
+- 版本号（三段 semver）语义与递增规则：[docs/规范/版本号说明.md](docs/规范/版本号说明.md)；大/小功能在 CHANGELOG 中分类，不占版本位
+- 发布流程与红线：[docs/规范/发布流程.md](docs/规范/发布流程.md)
 - 安装指定版本：`dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.2.0`
 - 历史说明：0.1.0–0.1.7 为早期逐批递增（见 CHANGELOG.md），0.2.0 起按本规范执行
 
-## 设置（设置 → 「OpenCode Go 用量」）
+## 设置（设置 → 「用量中心」）
 
 | 设置项 | 说明 | 生效方式 |
 |---|---|---|
