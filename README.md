@@ -20,12 +20,21 @@ dsh plugin --profile web add file:/path/to/dsh-provider-usage
 
 然后重启 `dsh web`。
 
+## 版本规范（自 v0.2.0 起）
+
+- 语义化版本 `MAJOR.MINOR.PATCH`：
+  - **PATCH**：缺陷修复（悬空、越界、遮挡等）
+  - **MINOR**：新功能（设置页、精灵动画、挂载方式、样式重构等）
+  - **MAJOR**：破坏性变更 / 里程碑发布
+- 发布流程：本地开发 → 本地验收 → 提交推送 → 打 tag（`vMAJOR.MINOR.PATCH`）
+- 安装指定版本：`dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.2.0`
+- 历史说明：0.1.0–0.1.7 为早期逐批递增（见 CHANGELOG.md），0.2.0 起按本规范执行
+
 ## 设置（设置 → 「OpenCode Go 用量」）
 
 | 设置项 | 说明 | 生效方式 |
 |---|---|---|
 | 显示悬浮鲸鱼 | 显示/隐藏 🐳 | 即时 |
-| z-index（层级） | 默认 2147483000（与 DSH 官方宠物一致）；面板打开时 🐳 自动降到面板之下 | 即时 |
 | 鲸鱼尺寸 | 32–512px（默认 160，与 dsh-pet 一致） | 即时 |
 | 面板自动刷新间隔 | 15s / 30s / 60s / 2min | 即时 |
 | 重置到右下角 | 清除位置记忆，回到默认（right:24 / bottom:20，与 dsh-pet 一致） | 即时 |
