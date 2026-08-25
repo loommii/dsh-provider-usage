@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.0（2026-08-24）
+
+### 小功能
+- 多适配器 + 提供方实例：按 adapter（usage-percent 订阅型 / balance-json 余额型）查询；设置页可管理提供方实例（名称自定义、Key 引用、增删改），卡片与选择菜单跟随清单；
+  卡片按结果字段自适应渲染（%+倒计时=订阅卡；金额+币种=余额卡）
+- 新增 host 路由：`/api/provider-usage/query?provider=<id>`（旧 `/opencode-go` 保持兼容）、`/api/provider-usage/templates`（预设清单）
+- 凭证链按 preset 泛化：DSH 设置 `llm-pi-ai.providers[<key>].apiKeyEnv` → 凭据服务 → 环境变量
+- 缓存 per-provider 隔离（30s 新鲜窗口各自独立）；cordis `baseUrl` 覆盖收敛为仅作用于 opencode-go（修复 DeepSeek 误打到 opencode 域名的 404）
+
+### UI
+- **删除宠物元素**：移除鲸鱼精灵/悬浮按钮/点击弹框，改用右下角**常驻用量卡片**（布局借鉴 Rainytoken 暗色视觉：暖深底、草莓粉、官方 logo、状态胶囊、三色窗口条、窗口行=标签/已用%/进度条/重置时间）
+- 设置面板：提供方管理（实例增删改、状态圆点），与官方「模型」页 1:1 同款骨架；卡片点击 logo/名称在**多实例**时弹出选择菜单，单实例不可点；卡片固定每 30s 自动刷新
+- 设置页实例支持「编辑」：导入的提供方可改名称；自定义提供方（vault）可改名称与 API 密钥（改 Key 后强制刷新查询，绕过 30s 缓存）；术语「供应商」统一改为「提供方」（对齐 DSH 模型页）
+- 旧数据自愈：早期手动实例（`source` 缺失/为 dsh 但 Key 仅存在插件私有库）自动迁移为 vault 手动实例，恢复可改 Key；`credential-refs` 新增 `store` 字段（dsh/vault/both/none）
+- 实例记录新增显式 `type` 字段（`import`=DSH 导入 / `manual`=自定义）：创建时写入，读取时显式 type 优先（旧数据由 source 推导兜底）；**type 决定编辑能力，source 仅表示 Key 解析位置**
+- 删除放开「最后一个实例」限制：支持删光提供方（空清单持久化，刷新不复活默认实例；用量卡片自动隐藏，设置页显示空态提示；删除自定义实例时同步清理私有库中的 Key）
+- **卡片可拖动 + 位置记忆**：与 dsh-pet 同款 pointer 拖拽（整卡可拖、4px 阈值防误触、右/下钳制在视口内）；松手即持久化到 `dsh-provider-usage.settings` 的 `right`/`bottom`，刷新/重挂载自动恢复位置（设置版本 v5）
+
+### 文档
+- README 更新为 M2（多供应商 + 卡片）；本地调研（cc-switch 机制、Rainytoken 评估）存 `tmp/` 不入仓库
+
 ## v0.3.0（2026-08-24）
 
 ### 小功能

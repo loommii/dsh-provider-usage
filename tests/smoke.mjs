@@ -1,6 +1,6 @@
-// M1 smoke test: mock a minimal cordis ctx, mount the host plugin,
-// and drive the /api/provider-usage/opencode-go handler. Without a real key
-// the outbound call fails; we assert the result shape and failure semantics.
+// M2 smoke test: mock a minimal cordis ctx, mount the host plugin,
+// and drive the /api/provider-usage/opencode-go handler plus the templates route.
+// Without a real key the outbound call fails; we assert the result shape.
 import { apply, name, inject } from '../lib/index.js'
 
 const capturedRoutes = []
@@ -24,8 +24,8 @@ if (name !== 'provider-usage') throw new Error('name mismatch')
 if (!inject.includes('webServer')) throw new Error('inject mismatch')
 const captured = capturedRoutes.find((r) => r.path === '/api/provider-usage/opencode-go')
 if (!captured) throw new Error('route not mounted')
-const assetRoute = capturedRoutes.find((r) => r.path.includes('/asset/whale-refined/'))
-if (!assetRoute) throw new Error('asset route not mounted')
+const templatesRoute = capturedRoutes.find((r) => r.path === '/api/provider-usage/templates')
+if (!templatesRoute) throw new Error('templates route not mounted')
 
 const req = { method: 'GET', socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:3080' } }
 let bodyText = null
@@ -69,10 +69,17 @@ if (!okJson.ok || okJson.remaining !== 87 || okJson.windows.rolling.usedPct !== 
 if (!/5小时: 91%/.test(okJson.extra) || !/7天: 88%/.test(okJson.extra)) throw new Error('extra text mismatch')
 globalThis.fetch = realFetch
 
-// ── 场景 3：资产路由（非回环 403）──
-let assetText = null
-const aRes = { writeHead: (c, h) => { aRes.code = c }, end: (t) => { assetText = t } }
-await assetRoute.handler({ method: 'GET', socket: { remoteAddress: '10.0.0.8' }, headers: { host: '127.0.0.1' } }, aRes)
-if (aRes.code !== 403) throw new Error('asset route loopback guard failed')
-console.log('asset-route guard status:', aRes.code)
+// ── 场景 3：templates 路由（清单 + 非回环 403）──
+let tplText = null
+const tplRes = { writeHead: (c, h) => { tplRes.code = c }, end: (t) => { tplText = t } }
+await templatesRoute.handler({ method: 'GET', socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:3080' } }, tplRes)
+const tpl = JSON.parse(tplText)
+if (!tpl.ok || tpl.items.length !== 2) throw new Error('templates mismatch: ' + tplText)
+if (tpl.items.some((i) => i.credentialRef !== undefined)) throw new Error('templates leak secrets')
+console.log('templates:', JSON.stringify(tpl.items.map((i) => i.id)))
+let tplForbidText = null
+const f2Res = { writeHead: (c, h) => { f2Res.code = c }, end: (t) => { tplForbidText = t } }
+await templatesRoute.handler({ method: 'GET', socket: { remoteAddress: '10.0.0.8' }, headers: { host: '127.0.0.1' } }, f2Res)
+if (f2Res.code !== 403) throw new Error('templates loopback guard failed')
+console.log('templates loopback-guard status:', f2Res.code)
 console.log('SMOKE OK')

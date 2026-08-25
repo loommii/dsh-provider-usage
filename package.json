@@ -1,11 +1,11 @@
 {
   "name": "dsh-provider-usage",
-  "version": "0.3.0",
-  "description": "DSH 插件（用量中心）：悬浮鲸鱼 · 供应商用量/余额/套餐查询（当前支持 OpenCode Go，对齐 cc-switch 查询语义）",
+  "version": "0.4.0",
+  "description": "DSH 插件（用量中心）：常驻用量卡片 · 多提供方用量/余额查询（OpenCode Go 订阅 + DeepSeek 余额，对齐 cc-switch 查询语义）",
   "type": "module",
   "main": "lib/index.js",
   "scripts": {
-    "test": "node tests/host.test.mjs && node tests/smoke.mjs"
+    "test": "node tests/host.test.mjs && node tests/smoke.mjs && node tests/secure-store.test.mjs"
   },
   "exports": {
     ".": "./lib/index.js",
