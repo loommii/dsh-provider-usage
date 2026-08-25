@@ -1,6 +1,6 @@
 {
   "name": "dsh-provider-usage",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "DSH 插件（用量中心）：常驻用量卡片 · 多提供方用量/余额查询（OpenCode Go 订阅 + DeepSeek 余额，对齐 cc-switch 查询语义）",
   "type": "module",
   "main": "lib/index.js",
