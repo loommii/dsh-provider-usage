@@ -26,7 +26,7 @@ function mount(overrides = {}) {
     effect: (fn) => { fn() },
     ...overrides,
   }
-  apply(ctx, { baseUrl: 'https://opencode.ai/zen/go', timeoutMs: 5000 })
+  apply(ctx, { baseUrl: 'https://opencode.ai/zen/go', timeoutMs: 5000, ...(overrides.rawConfig || {}) })
   route = routes.find((r) => r.path === '/api/provider-usage/opencode-go')
   if (!route) throw new Error('usage route not registered')
   async function call(remote = '127.0.0.1', stub, method = 'GET', host = '127.0.0.1:3080', url = null) {
@@ -424,6 +424,270 @@ console.log('场景 24：credential-refs 返回 store（dsh/vault/both/none，�
   } finally {
     if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
   }
+}
+
+
+// ── 本地 Token 统计（v0.5.0）：DSH 会话日志折叠 ──
+function asstMsg(provider, model, usage, time, turn, step) {
+  return { type: "assistant/message", time, data: { turn, step, usage, message: provider ? { source: { provider, model } } : {} } }
+}
+function chunkUsage(usage, time) {
+  return { type: "assistant/chunk", time, data: { turn: 1, step: 1, chunk: { type: "usage", usage } } }
+}
+function headerEvt(provider, model, time) {
+  return { type: "request/header", time, data: { header: { config: { provider, model } } } }
+}
+function titleEvt(title) {
+  return { type: "session/title", time: 1, data: { title } }
+}
+function mkSessions(list) {
+  const byId = new Map(list.map((s) => [s.id, s]))
+  return {
+    listSessions: async () => list.map((s) => ({ header: { id: s.id, createdAt: s.createdAt, cwd: s.cwd, agentPreset: s.agentPreset } })),
+    readSession: async (id) => { const s = byId.get(id); return s ? { session: { createdAt: s.createdAt }, events: s.events } : { session: null, events: [] } },
+  }
+}
+
+// ── 本地 Token 统计 v2：按天物化（自读会话文件 + 天文件封存）──
+// 每个场景独立临时 DSH_HOME + sessionsDir；解码器注入 identity（测试文件存明文 JSONL）。
+const osMod = await import("node:os")
+const fsxMod = await import("node:fs/promises")
+const pathMod = await import("node:path")
+const { _setDecoderForTests } = await import("../lib/daily-stats.js")
+_setDecoderForTests((b) => Buffer.from(b))
+const T_DAY = new Date(2026, 7, 25, 10, 0, 0).getTime() // 2026-08-25 10:00
+async function localEnv() {
+  const home = await fsxMod.mkdtemp(pathMod.join(osMod.tmpdir(), "pu-daily-"))
+  const sessions = pathMod.join(home, "sessions", "proj")
+  await fsxMod.mkdir(sessions, { recursive: true })
+  process.env.DSH_HOME = home
+  return { home, sessions }
+}
+async function writeSession(sessions, id, events, mtimeMs) {
+  const dir = pathMod.join(sessions, id)
+  await fsxMod.mkdir(dir, { recursive: true })
+  const file = pathMod.join(dir, "session.jsonl.zstd")
+  await fsxMod.writeFile(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n")
+  await fsxMod.utimes(file, new Date(mtimeMs), new Date(mtimeMs))
+}
+function msg(provider, model, usage, time) {
+  return { type: "assistant/message", time, data: { turn: 1, step: 1, usage, message: { source: { provider, model } } } }
+}
+function hdr(provider, model) {
+  return { type: "request/header", time: 0, data: { header: { config: { provider, model } } } }
+}
+function chunk(usage, time) {
+  return { type: "assistant/chunk", time, data: { turn: 1, step: 1, chunk: { type: "usage", usage } } }
+}
+
+console.log('场景 25：本地统计找不到会话目录 → no-sessions')
+{
+  const os2 = await import("node:os")
+  const fsx2 = await import("node:fs/promises")
+  const path2 = await import("node:path")
+  const home = await fsx2.mkdtemp(path2.join(os2.tmpdir(), "pu-nosess-"))
+  process.env.DSH_HOME = home
+  const m = mount({ rawConfig: { sessionsDir: path2.join(home, "does-not-exist") } })
+  const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j.ok === false && j.error.type === 'no-sessions', 'no-sessions 类型化错误')
+}
+
+console.log('场景 26：今天聚合（只扫今天变过的文件）→ totals/byModel/providers/days')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "s1", [
+    msg("opencode-go", "m1", { inputTokens: 100, outputTokens: 50, cacheReadTokens: 200 }, T_DAY + 1000),
+    msg("opencode-go", "m1", { inputTokens: 100, outputTokens: 50, cacheReadTokens: 200 }, T_DAY + 2000),
+  ], T_DAY + 5000)
+  const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j.ok === true && j.detected === true && j.days === 1, "ok/detected/days=1")
+  assert(j.totals.requests === 2 && j.totals.inputTokens === 200 && j.totals.outputTokens === 100 && j.totals.cacheReadTokens === 400, "累计 2 条消息")
+  assert(j.totals.realTotalTokens === 700 && Math.abs(j.totals.cacheHitRate - 400 / 600) < 1e-9, "realTotal/命中率")
+  assert(JSON.stringify(j.providers) === JSON.stringify(["opencode-go"]) && j.byModel.m1.requests === 2, "providers/byModel")
+  const file = pathMod.join(env.home, "provider-usage", "daily-stats", "2026-08-25.json")
+  const stored = JSON.parse(await fsxMod.readFile(file, "utf8"))
+  assert(stored.byProvider["opencode-go"].requests === 2 && stored.date === "2026-08-25", "天文件已落盘（全量）")
+}
+
+console.log('场景 27：provider 过滤')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "s1", [
+    msg("opencode-go", "a", { inputTokens: 10, outputTokens: 20, cacheReadTokens: 30 }, T_DAY + 1000),
+    msg("opencode-go", "a", { inputTokens: 10, outputTokens: 20, cacheReadTokens: 30 }, T_DAY + 2000),
+    msg("opencode", "b", { inputTokens: 5, outputTokens: 5, cacheReadTokens: 0 }, T_DAY + 3000),
+  ], T_DAY + 5000)
+  const go = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(go.totals.requests === 2 && go.totals.inputTokens === 20, "opencode-go 只算自己的")
+  const all = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(all.totals.requests === 3, "全部 provider requests=3")
+  assert(all.providers.length === 2 && all.byModel.b.requests === 1, "providers 枚举/byModel 全量")
+}
+
+console.log('场景 28：归属回退 request/header + chunk 不双计')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "s1", [
+    hdr("opencode-go", "fm"),
+    msg(null, null, { inputTokens: 7, outputTokens: 8, cacheReadTokens: 9 }, T_DAY + 1000),
+    chunk({ inputTokens: 7, outputTokens: 8, cacheReadTokens: 9 }, T_DAY + 1000),
+  ], T_DAY + 5000)
+  const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(j.totals.requests === 1 && j.totals.inputTokens === 7 && j.byModel.fm.requests === 1, "回退 header；chunk 不双计")
+}
+
+console.log('场景 29：历史封存 —— 昨天数据不重算，只有今天变更才重新统计')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  // 昨天：10:00 查询，写天文件（deps 记录文件 mtime=T_DAY）
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "old", [
+    msg("opencode-go", "m", { inputTokens: 100, outputTokens: 100, cacheReadTokens: 0 }, T_DAY + 1000),
+  ], T_DAY + 5000)
+  const j0 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j0.totals.inputTokens === 100, "昨天下班前统计到 100")
+  // 今天：advance 24h，旧文件 mtime 未变 → 不被扫描；历史从封存天文件读取
+  globalThis.Date.now = () => T_DAY + 24 * 3600000
+  await writeSession(env.sessions, "new", [
+    msg("opencode-go", "m", { inputTokens: 50, outputTokens: 50, cacheReadTokens: 0 }, T_DAY + 24 * 3600000 + 1000),
+  ], T_DAY + 24 * 3600000 + 5000)
+  const j1 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j1.days === 2 && j1.totals.inputTokens === 150, "昨天(封存 100) + 今天(50) = 150")
+  // 篡改昨天的会话文件内容但保持 mtime → 天文件已验证（封存），不重算 → 结果不变
+  const oldFile = pathMod.join(env.sessions, "old", "session.jsonl.zstd")
+  await fsxMod.writeFile(oldFile, JSON.stringify(msg("opencode-go", "m", { inputTokens: 999, outputTokens: 999, cacheReadTokens: 0 }, T_DAY + 1000)) + "\n")
+  await fsxMod.utimes(oldFile, new Date(T_DAY + 5000), new Date(T_DAY + 5000))
+  globalThis.Date.now = () => T_DAY + 24 * 3600000 + 31000
+  const j2 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j2.totals.inputTokens === 150, "mtime 未变 → 昨天仍用封存值（内容被改也不重算）")
+  // 现在把昨天的文件 mtime 改成今天 → validateDeps 检测到变化 → 只重算昨天当天，并计入新内容
+  await fsxMod.utimes(oldFile, new Date(T_DAY + 24 * 3600000 + 6000), new Date(T_DAY + 24 * 3600000 + 6000))
+  globalThis.Date.now = () => T_DAY + 24 * 3600000 + 62000 + 300000 // 越过 deps 5 分钟校验周期
+  const j3 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j3.totals.inputTokens === 1049, "mtime 变化 → 昨天重算（999）+ 今天（50）= 1049")
+}
+
+console.log('场景 30：since 时间过滤（历史天窗口）')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "old", [msg("opencode-go", "m", { inputTokens: 100, outputTokens: 0, cacheReadTokens: 0 }, T_DAY + 1000)], T_DAY + 5000)
+  await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  globalThis.Date.now = () => T_DAY + 24 * 3600000
+  await writeSession(env.sessions, "new", [msg("opencode-go", "m", { inputTokens: 30, outputTokens: 0, cacheReadTokens: 0 }, T_DAY + 24 * 3600000 + 1000)], T_DAY + 24 * 3600000 + 5000)
+  const all = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(all.totals.inputTokens === 130 && all.days === 2, "全部 = 130 / 2 天")
+  const near = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?since=" + (T_DAY + 12 * 3600000))
+  assert(near.totals.inputTokens === 30 && near.days === 1, "近半天窗口只含今天 30")
+}
+
+console.log('场景 31：30s 缓存 + noCache + 回环防护 + 今天零数据')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "s1", [msg("opencode-go", "m", { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3 }, T_DAY + 1000)], T_DAY + 5000)
+  const j1 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  const j2 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(j1.cached === false && j2.cached === true, "30s 窗口内命中缓存")
+  const j3 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go&noCache=1")
+  assert(j3.cached === false, "noCache=1 强制重算")
+  const forb = await m.call("8.8.8.8", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(forb.error === "forbidden: loopback-only", "非回环 → 403")
+  // 无 today 文件可扫 → totals 仍为对象（全 0），不报错
+  globalThis.Date.now = () => T_DAY + 24 * 3600000
+  const empty = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(empty.ok === true && empty.totals.requests === 1 && empty.days === 2, "历史封存仍在（requests=1），今天零数据不崩")
+}
+
+
+
+console.log('场景 32：首次使用 → 全量回填（老数据可见，只回填一次）')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  async function writeDayAgo(id, daysAgo, input) {
+    const t = T_DAY - daysAgo * 86400000
+    await writeSession(env.sessions, id, [msg("opencode-go", "m", { inputTokens: input, outputTokens: 0, cacheReadTokens: 0 }, t + 3600000)], t + 3600000 + 5000)
+  }
+  await writeDayAgo("d3", 3, 100)
+  await writeDayAgo("d1", 1, 200)
+  await writeDayAgo("d0", 0, 50)
+  const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j.totals.inputTokens === 350 && j.days === 3, "首次回填：3 天历史全部可见（100+200+50）")
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  const files = await fsxMod.readdir(dailyDir)
+  const dayFiles = files.filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+  assert(dayFiles.length === 3, "历史天文件已落盘（" + dayFiles.join(",") + "）")
+  const histFile = pathMod.join(dailyDir, dayFiles[0])
+  const st1 = await fsxMod.stat(histFile)
+  globalThis.Date.now = () => T_DAY + 31000
+  const j2 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  const st2 = await fsxMod.stat(histFile)
+  assert(j2.totals.inputTokens === 350 && st2.mtimeMs === st1.mtimeMs, "二次调用不回填（历史天文件未重写）")
+  // 7 天范围 where 3 天前出发 → 也要照顾 since 窗口：查 since = 2 天前 → 只含昨天+今天
+  const near = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?since=" + (T_DAY - 2 * 86400000))
+  assert(near.totals.inputTokens === 250 && near.days === 2, "since 窗口含昨天+今天（250）")
+}
+
+
+console.log('场景 33：旧版遗留（只有今天天文件、无哨兵）→ 自动回填历史')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  // 模拟旧版遗留：daily-stats 只有"今天"的天文件（无历史、无 .backfilled 哨兵）
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  await fsxMod.mkdir(dailyDir, { recursive: true })
+  await fsxMod.writeFile(pathMod.join(dailyDir, "2026-08-25.json"), JSON.stringify({ version: 1, date: "2026-08-25", deps: {}, byProvider: {}, byModel: {} }), "utf8")
+  // 3 天前的历史会话（旧版从未统计过）
+  const tPast = T_DAY - 3 * 86400000
+  await writeSession(env.sessions, "old", [msg("opencode-go", "m", { inputTokens: 100, outputTokens: 0, cacheReadTokens: 0 }, tPast + 3600000)], tPast + 3600000 + 5000)
+  const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j.totals.inputTokens === 100 && j.days === 2, "旧版遗留 → 自动回填（3 天前 100 + 今天 0，days=2）")
+  const files = await fsxMod.readdir(dailyDir)
+  assert(files.includes("2026-08-22.json") && files.includes(".backfilled"), "历史天文件 + 哨兵已生成")
+}
+
+
+console.log('场景 34：增量解码 —— 文件追加新帧只算新增，mtime 未变零成本跳过')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  const file = pathMod.join(env.sessions, "s1", "session.jsonl.zstd")
+  await fsxMod.mkdir(pathMod.dirname(file), { recursive: true })
+  async function appendMsg(input, mtime) {
+    await fsxMod.appendFile(file, JSON.stringify(msg("opencode-go", "m", { inputTokens: input, outputTokens: 0, cacheReadTokens: 0 }, T_DAY + 1000 + input)) + "\n")
+    await fsxMod.utimes(file, new Date(mtime), new Date(mtime))
+  }
+  await appendMsg(10, T_DAY + 10000)
+  const j1 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j1.totals.inputTokens === 10, "首次全量：10")
+  // 追加 20（mtime 变化）→ 增量只解新帧
+  await appendMsg(20, T_DAY + 20000)
+  globalThis.Date.now = () => T_DAY + 31000
+  const j2 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j2.totals.inputTokens === 30, "增量追加：10+20=30")
+  // 追加 30 但 mtime 还原 → 本轮跳过（零成本），值不变
+  await appendMsg(30, T_DAY + 20000)
+  globalThis.Date.now = () => T_DAY + 62000
+  const j3 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j3.totals.inputTokens === 30, "mtime 未变：跳过（仍 30）")
+  // mtime 恢复变化 → 增量拿到 30（10+20+30=60）
+  await fsxMod.utimes(file, new Date(T_DAY + 25000), new Date(T_DAY + 25000))
+  globalThis.Date.now = () => T_DAY + 93000
+  const j4 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j4.totals.inputTokens === 60, "mtime 再变：增量补到 60")
 }
 
 if (failed > 0) { console.error('\nFAILED: ' + failed + ' 项'); process.exit(1) }

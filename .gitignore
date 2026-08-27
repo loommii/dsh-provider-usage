@@ -1,2 +1,5 @@
 # 本地讨论/临时文件，不上传（2026-08-24）
 tmp/
+
+# 依赖（package-lock.json 入库锁定版本）
+node_modules/
