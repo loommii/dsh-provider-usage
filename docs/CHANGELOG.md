@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.1（2026-08-31）
+
+### 修复
+- 卡片 hover 标题 `title` 从空字符串改为显示当前提供方名（多 provider 时显示「点击切换」）
+
+### 小功能
+- a11y：`prefers-reduced-motion` 媒体查询禁用呼吸动画与进度条扫光（尊重系统级无障碍偏好）
+
+### 文档
+- 新增 `LICENSE`（MIT）；`package.json` `files` 补全以确保 npm tarball 包含 LICENSE
+- README：顶部副标题加「附带本地 Token 统计页」、功能列表新增 Token 统计要点、安装/卸载章节拆分 GitHub 与 npm 两栏、使用说明补「两个标签」提示、新增「配置项」表格、新增 License 章节
+
 ## v0.6.0（2026-08-31）
 
 > **npm 首发**：本版本同步发布至 npm `@loommii/dsh-provider-usage`（无 scope 的 `dsh-provider-usage` 包名已被他人占用，故改用账号 scope）。npm 与 GitHub 渠道**同号同码**（同一提交、同一 tag `v0.6.0`）；scoped 包首次发布需 `--access public`（已在 `publishConfig` 配置），安装方无感。

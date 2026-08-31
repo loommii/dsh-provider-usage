@@ -1,8 +1,8 @@
 # dsh-provider-usage — DSH「用量中心」
 
-> 当前版本 **v0.6.0** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
+> 当前版本 **v0.6.1** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
 
-DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片，实时显示你的 AI 服务用量 / 余额，不用再打开网页查。
+DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片，实时显示你的 AI 服务用量 / 余额，不用再打开网页查；附带本地 Token 统计页，不联网也能看自己今天用了多少。
 
 ## v0.6.0 更新摘要
 
@@ -26,23 +26,36 @@ DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片
 - **常驻用量卡片**：右下角悬浮，一眼看到剩余量；可随意拖动，位置自动记住
 - **自动刷新**：每 30s 自动更新；想看最新数据点卡片上的 ↻ 立即重新查询
 - **多实例**：可以同时配置多个提供方（如多个 OpenCode Go 账号），点卡片 logo / 名称切换查看
+- **本地 Token 统计**：自读本机 `$DSH_HOME/sessions` 会话文件，按天聚合今天的 Token 用量（总量 + 按模型汇总），**只读本地、不联网**；数据落盘 `$DSH_HOME/provider-usage/daily-stats/`，历史天封存只算今天
 - **状态提示**：正常 / 未更新 / 注意 / 错误，请求中显示「查询中」动画
 - **Key 安全**：密钥只在 DSH 进程内解析使用，界面上一律打码显示；自定义 Key 可加密保存在本机（AES-256 加密），不落明文
 
-## 安装
+## 安装 / 卸载
+
+### GitHub
 
 ```sh
-# 从 npm 安装
-dsh plugin --profile web add @loommii/dsh-provider-usage
-
-# 从 GitHub 安装（等价，同一份代码 v0.6.0）
+# 安装
 dsh plugin --profile web add github:loommii/dsh-provider-usage
 
 # 安装指定版本（可选）
 dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.6.0
+
+# 卸载
+dsh plugin --profile web remove @loommii/dsh-provider-usage
 ```
 
-安装后重启 `dsh web` 即可在设置页看到「用量中心」。
+### npm
+
+```sh
+# 安装
+dsh plugin --profile web add @loommii/dsh-provider-usage
+
+# 卸载
+dsh plugin --profile web remove @loommii/dsh-provider-usage
+```
+
+安装 / 卸载后重启 `dsh web` 即可生效。
 
 > npm 包名为 `@loommii/dsh-provider-usage`（无 scope 的 `dsh-provider-usage` 在 npm 上已被他人占用）。
 
@@ -59,5 +72,22 @@ dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.6.0
 ## 使用说明
 
 - 提供方实例的增删改、Key 设置都在 **设置 → 用量中心** 里完成，改动即时生效，无需重启
+- 设置页有两个标签：「提供方」管理实例，「用量统计」查看本地 Token 统计
 - 设置保存在本机浏览器中；删掉实例不会上传或泄露任何 Key
 - 卡片拖动后的位置会自动保存，下次打开还是老位置
+
+## 配置项（可选）
+
+以下配置写入 profile 的 bundle 配置（`cordis.patch.yml` / 设置页），全部有合理默认值，不配也能用：
+
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `baseUrl` | – | 仅覆盖 OpenCode Go 的查询地址（历史语义）；其余提供方用内置官方地址 |
+| `timeoutMs` | `15000` | 出站请求超时（上限 30000） |
+| `subscriptionTimeoutMs` | `5000` | Command Code 订阅端点（次要端点）超时；慢网络可调大 |
+| `maxSessions` | `30` | 本地 Token 统计扫描的会话文件数上限（上限 100） |
+| `sessionsDir` | `$DSH_HOME/sessions` | 本地 Token 统计的会话目录覆盖 |
+
+## License
+
+[MIT](LICENSE)
