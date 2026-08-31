@@ -2,6 +2,8 @@
 
 ## v0.6.0（2026-08-31）
 
+> **npm 首发**：本版本同步发布至 npm `@loommii/dsh-provider-usage`（无 scope 的 `dsh-provider-usage` 包名已被他人占用，故改用账号 scope）。npm 与 GitHub 渠道**同号同码**（同一提交、同一 tag `v0.6.0`）；scoped 包首次发布需 `--access public`（已在 `publishConfig` 配置），安装方无感。
+
 ### 大功能
 - **新增提供方 Command Code（订阅+余额混合卡）**：只能通过「添加自定义提供方」添加（Command Code 非 DSH 内置提供方，pi-ai 注册表无对应 provider，故不出现在「从 DSH 导入提供方」列表）
   - 新适配器 `commandcode-credits`：官方双端点查询（`/alpha/billing/credits` + `/alpha/billing/subscriptions`），只填 API Key（加密存插件私有库，不经 DSH 凭证）

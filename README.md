@@ -1,6 +1,6 @@
 # dsh-provider-usage — DSH「用量中心」
 
-> 当前版本 **v0.6.0** · [更新历史](docs/CHANGELOG.md)
+> 当前版本 **v0.6.0** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
 
 DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片，实时显示你的 AI 服务用量 / 余额，不用再打开网页查。
 
@@ -32,7 +32,10 @@ DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片
 ## 安装
 
 ```sh
-# 从 GitHub 安装（推荐）
+# 从 npm 安装
+dsh plugin --profile web add @loommii/dsh-provider-usage
+
+# 从 GitHub 安装（等价，同一份代码 v0.6.0）
 dsh plugin --profile web add github:loommii/dsh-provider-usage
 
 # 安装指定版本（可选）
@@ -40,6 +43,8 @@ dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.6.0
 ```
 
 安装后重启 `dsh web` 即可在设置页看到「用量中心」。
+
+> npm 包名为 `@loommii/dsh-provider-usage`（无 scope 的 `dsh-provider-usage` 在 npm 上已被他人占用）。
 
 ## 快速开始
 
