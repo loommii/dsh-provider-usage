@@ -71,6 +71,15 @@ console.log('场景 1：成功解析')
   assert(j.error === null && j.stale === false && j.cached === false, '无错误标记')
   assert(j.credential && j.credential.source === 'credential:OPENCODE_GO_API_KEY', '凭证来源')
   assert(j.credential.keyHint === 'sk-t…3456', 'key 掩码')
+  // 回归（审查 #2）：UA 版本号来自 package.json，不再硬编码（此前残留 0.5.0）
+  let ua = null
+  globalThis.fetch = async (input, init) => {
+    ua = ((init && init.headers) || {})['user-agent'] || null
+    return { status: 200, ok: true, json: async () => SAMPLE }
+  }
+  await m.call('127.0.0.1', undefined, 'GET', '127.0.0.1:3080', '/api/provider-usage/query?adapter=usage-percent&ref=OPENCODE_GO_API_KEY&noCache=1')
+  globalThis.fetch = m.wrapFetch(res200())
+  assert(ua === 'dsh-provider-usage/0.6.0', 'user-agent 版本 = package.json 版本（0.6.0）')
 }
 
 console.log('场景 2：30s 缓存复用')
@@ -161,9 +170,9 @@ console.log('场景 10：templates 清单')
 {
   const m = mount()
   const j = await m.call('127.0.0.1', undefined, 'GET', '127.0.0.1:3080', '/api/provider-usage/templates')
-  assert(j.ok === true && Array.isArray(j.items) && j.items.length === 2, '2 个预设')
-  assert(j.items[0].id === 'usage-percent' && j.items[1].id === 'balance-json', '适配器 id 与顺序')
-  assert(j.items[0].credentialRef === undefined && j.items[1].credentialRef === undefined, '不含凭证引用')
+  assert(j.ok === true && Array.isArray(j.items) && j.items.length === 3, '3 个预设')
+  assert(j.items[0].id === 'usage-percent' && j.items[1].id === 'balance-json' && j.items[2].id === 'commandcode-credits', '适配器 id 与顺序')
+  assert(j.items[0].credentialRef === undefined && j.items[1].credentialRef === undefined && j.items[2].credentialRef === undefined, '不含凭证引用')
 }
 
 console.log('场景 11：query 新路由与旧路由一致 + 命中缓存')
@@ -307,6 +316,216 @@ console.log('场景 20：dsh-providers 可导入清单')
   assert(j.items[0].ref === 'OPENCODE_GO_API_KEY', 'ref 来自 DSH provider 设置（apiKeyEnv）')
   assert(j.items[1].route === 'deepseek-official' && j.items[1].adapter === 'balance-json' && j.items[1].ref === 'DEEPSEEK_API_KEY', 'deepseek 适配（内置路由默认 ref）')
   assert(j.items[0].configured === true && j.items[1].configured === true, 'mock 凭证均判定已配置')
+  assert(j.items.every((x) => x.adapter !== 'commandcode-credits'), 'Command Code 不在 DSH 导入清单（仅自定义）')
+}
+
+// ── Command Code（v0.6.0）：订阅+余额混合卡 ──
+const CC_CREDITS = {
+  credits: {
+    belowThreshold: false,
+    creditThreshold: 0,
+    monthlyCredits: 62.9432148907,
+    purchasedCredits: 0,
+    freeCredits: 0,
+  },
+  windowLimits: {
+    limited: true,
+    exceeded: null,
+    fiveHour: { used: 0.3699430743, cap: 14, exceeded: false, resetAt: 1788114535553 },
+    weekly: { used: 7.0567851093, cap: 35, exceeded: false, resetAt: 1788405909707 },
+  },
+}
+const CC_SUB = {
+  success: true,
+  data: {
+    id: 'sub_1U8tmpDSZgxV3MJKLaKrcqJ7',
+    status: 'active',
+    planId: 'individual-goat',
+    currentPeriodStart: '2026-08-27T03:14:04.000Z',
+    currentPeriodEnd: '2026-09-27T03:14:04.000Z',
+    cancelAtPeriodEnd: false,
+  },
+}
+function ccStub(credits = CC_CREDITS, sub = CC_SUB, subStatus = 200) {
+  return async (input) => {
+    const url = String(input)
+    if (url.includes('/alpha/billing/credits')) {
+      return { status: 200, ok: true, json: async () => credits }
+    }
+    if (url.includes('/alpha/billing/subscriptions')) {
+      if (subStatus !== 200) return { status: subStatus, ok: false, json: async () => ({}) }
+      return { status: 200, ok: true, json: async () => sub }
+    }
+    return { status: 404, ok: false, json: async () => ({}) }
+  }
+}
+const CC_QS = '/api/provider-usage/query?adapter=commandcode-credits&ref=CC_KEY&source=vault'
+
+console.log('场景 20b：Command Code 双端点成功 → 订阅使用量 + 剩余额度')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-cc-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const { createSecureStore } = await import('../lib/secure-store.js')
+    const priv = createSecureStore(pathMod.join(tmp, 'provider-usage'))
+    await priv.init()
+    await priv.set('CC_KEY', 'sk-cc-vault-12345678')
+    const m = mount({
+      settings: { get: () => ({ providers: {} }) },
+      credentials: { resolve: async () => null },
+    })
+    const j = await m.call('127.0.0.1', m.wrapFetch(ccStub()), 'GET', '127.0.0.1:3080', CC_QS)
+    assert(j.ok === true && j.planName === 'Command Code（GOAT）', 'planName 来自 planId')
+    assert(j.remaining === 62.9432148907 && j.unit === 'USD', '月度剩余 USD')
+    assert(Math.abs(j.used - 7.0567851093) < 1e-9, '月已用 = 70 − 62.9432')
+    assert(j.totalQuota === 70, 'totalQuota 来自计划映射')
+    assert(j.nextResetAt === '2026-09-27T03:14:04.000Z', '月重置 = currentPeriodEnd')
+    assert(j.monthly && Math.abs(j.monthly.usedPct - 10.0811) < 1e-3, '月已用百分比 (70−62.94)/70')
+    assert(j.windows.fiveHour.usedPct !== null && j.windows.weekly.usedPct !== null, '5h/周窗口')
+    assert(j.windows.fiveHour.usedPct > 0 && j.windows.fiveHour.usedPct < 3, '5h 百分比 ~2.6%')
+    assert(j.windows.weekly.usedPct > 20 && j.windows.weekly.usedPct < 21, '周百分比 ~20.2%')
+    // 回归（审查 #1）：窗口重置字段必须叫 resetsAt（client WindowRow 统一读该名），
+    // 此前 host 返回 resetAt → 卡片倒计时恒空白。1788114535553 → 2026-08-30T18:28:55.553Z
+    assert(j.windows.fiveHour.resetsAt === '2026-08-30T18:28:55.553Z', '5h 重置字段名 resetsAt')
+    assert(j.windows.weekly.resetsAt === '2026-09-03T03:25:09.707Z', '周重置字段名 resetsAt')
+    assert(j.monthly.resetsAt === '2026-09-27T03:14:04.000Z', '月窗口重置 resetsAt = currentPeriodEnd')
+    assert(j.credential.source === 'provider-usage:CC_KEY', 'vault 直取私有库 Key')
+    assert(/月已用 7.06/.test(j.extra) && /月剩余 62.94/.test(j.extra), 'extra 文案')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
+}
+
+console.log('场景 20c：Command Code 订阅端点失败 → 降级（窗口+剩余仍在，无计划名/月% ）')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-ccsub-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const { createSecureStore } = await import('../lib/secure-store.js')
+    const priv = createSecureStore(pathMod.join(tmp, 'provider-usage'))
+    await priv.init()
+    await priv.set('CC_KEY', 'sk-cc-vault-12345678')
+    const m = mount({
+      settings: { get: () => ({ providers: {} }) },
+      credentials: { resolve: async () => null },
+    })
+    const j = await m.call('127.0.0.1', m.wrapFetch(ccStub(CC_CREDITS, null, 500)), 'GET', '127.0.0.1:3080', CC_QS)
+    assert(j.ok === true && j.error === null, '订阅端点失败不致命')
+    assert(j.planName === 'Command Code', '降级为通用名')
+    assert(j.totalQuota === null && j.monthly.usedPct === null, '无计划 → 月% 降级 null')
+    assert(j.remaining === 62.9432148907 && j.windows.fiveHour.usedPct !== null, '剩余与窗口仍在')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
+}
+
+console.log('场景 20d：Command Code 未知 planId → 降级不崩')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-ccunk-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const { createSecureStore } = await import('../lib/secure-store.js')
+    const priv = createSecureStore(pathMod.join(tmp, 'provider-usage'))
+    await priv.init()
+    await priv.set('CC_KEY', 'sk-cc-vault-12345678')
+    const m = mount({
+      settings: { get: () => ({ providers: {} }) },
+      credentials: { resolve: async () => null },
+    })
+    const sub = Object.assign({}, CC_SUB, { data: Object.assign({}, CC_SUB.data, { planId: 'individual-future-plan' }) })
+    const j = await m.call('127.0.0.1', m.wrapFetch(ccStub(CC_CREDITS, sub)), 'GET', '127.0.0.1:3080', CC_QS)
+    assert(j.ok === true, '未知计划不崩溃')
+    assert(j.totalQuota === null && j.monthly.usedPct === null, '未知计划 → 月% null')
+    assert(j.planName === 'Command Code', '未知计划通用名')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
+}
+
+console.log('场景 20e：Command Code credits 401 → unauthorized')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-cc401-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const { createSecureStore } = await import('../lib/secure-store.js')
+    const priv = createSecureStore(pathMod.join(tmp, 'provider-usage'))
+    await priv.init()
+    await priv.set('CC_KEY', 'sk-cc-vault-12345678')
+    const m = mount({
+      settings: { get: () => ({ providers: {} }) },
+      credentials: { resolve: async () => null },
+    })
+    const stub = async (input) => {
+      const url = String(input)
+      if (url.includes('/alpha/billing/credits')) return { status: 401, ok: false, json: async () => ({}) }
+      return { status: 200, ok: true, json: async () => CC_SUB }
+    }
+    const j = await m.call('127.0.0.1', m.wrapFetch(stub), 'GET', '127.0.0.1:3080', CC_QS)
+    assert(j.ok === false && j.error.type === 'unauthorized' && j.error.httpStatus === 401, '401 → unauthorized')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
+}
+
+console.log('场景 20f：Command Code 订阅端点挂起 → 短超时 abort，不拖累整体响应')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-ccslow-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const { createSecureStore } = await import('../lib/secure-store.js')
+    const priv = createSecureStore(pathMod.join(tmp, 'provider-usage'))
+    await priv.init()
+    await priv.set('CC_KEY', 'sk-cc-vault-12345678')
+    const m = mount({
+      settings: { get: () => ({ providers: {} }) },
+      credentials: { resolve: async () => null },
+      rawConfig: { timeoutMs: 10000, subscriptionTimeoutMs: 200 },
+    })
+    // subscriptions 永不响应（真实 fetch 行为：abort 触发时以 AbortError reject）
+    const hangSub = async (input, init) => {
+      const url = String(input)
+      if (url.includes('/alpha/billing/subscriptions')) {
+        return new Promise((resolve, reject) => {
+          const signal = init && init.signal
+          const abortErr = () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+          if (signal) {
+            if (signal.aborted) { abortErr(); return }
+            signal.addEventListener('abort', abortErr)
+          }
+        })
+      }
+      if (url.includes('/alpha/billing/credits')) return { status: 200, ok: true, json: async () => CC_CREDITS }
+      return { status: 404, ok: false, json: async () => ({}) }
+    }
+    const t0 = performance.now()
+    const j = await m.call('127.0.0.1', m.wrapFetch(hangSub), 'GET', '127.0.0.1:3080', CC_QS)
+    const elapsed = performance.now() - t0
+    assert(j.ok === true && j.error === null, '订阅端点挂起不致命（降级成功）')
+    assert(j.totalQuota === null && j.planName === 'Command Code', '降级：无计划名/月%')
+    assert(elapsed < 2000, '整体在订阅短超时后返回（' + Math.round(elapsed) + 'ms < 2000ms，未等全局 10s）')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
 }
 
 console.log('场景 21：source=vault 直取私有库（同名不与 DSH 冲突）')

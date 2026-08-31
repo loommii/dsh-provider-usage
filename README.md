@@ -1,8 +1,17 @@
 # dsh-provider-usage — DSH「用量中心」
 
-> 当前版本 **v0.4.2** · [更新历史](docs/CHANGELOG.md)
+> 当前版本 **v0.6.0** · [更新历史](docs/CHANGELOG.md)
 
 DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片，实时显示你的 AI 服务用量 / 余额，不用再打开网页查。
+
+## v0.6.0 更新摘要
+
+- **新增提供方 Command Code（订阅+余额混合卡）**：5 小时 / 周 / 月窗口使用量 + 月度剩余额度（USD），主数字为月已用百分比
+- **窗口重置倒计时修复**：之前 5 小时/周窗口的"重置"字段恒为空，现在正常显示倒计时
+- **请求 User-Agent 跟随版本号**：告别硬编码残留，升版不再漏改
+- **订阅端点短超时**：新增 `subscriptionTimeoutMs`（默认 5s），防止次要端点挂起拖累整体响应
+- **月百分比智能隐藏**：Command Code 月用量无法推算时隐藏整行，避免"0% 还没用"的误导
+- 完整变更见 [CHANGELOG](docs/CHANGELOG.md)
 
 ## 支持的提供方
 
@@ -10,6 +19,7 @@ DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片
 |---|---|
 | OpenCode Go（订阅） | 5 小时 / 7 天 / 月度三个窗口的已用百分比 + 进度条 + 重置倒计时 |
 | DeepSeek（余额） | 账户余额（CNY） |
+| Command Code（订阅+余额，自定义） | 5 小时 / 周 / 月窗口使用量 + 月度剩余额度（USD），主数字为月已用百分比 |
 
 ## 功能
 
@@ -26,7 +36,7 @@ DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片
 dsh plugin --profile web add github:loommii/dsh-provider-usage
 
 # 安装指定版本（可选）
-dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.4.2
+dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.6.0
 ```
 
 安装后重启 `dsh web` 即可在设置页看到「用量中心」。
@@ -37,6 +47,7 @@ dsh plugin --profile web add github:loommii/dsh-provider-usage#v0.4.2
 2. 添加一个实例：
    - **OpenCode Go 订阅**：需要 OpenCode Go 的 API Key（默认读取 `OPENCODE_GO_API_KEY`）
    - **DeepSeek 余额**：需要 DeepSeek 开放平台的 API Key（默认读取 `DEEPSEEK_API_KEY`）
+   - **Command Code（自定义）**：仅「添加自定义提供方」可选；需要 Command Code 后台生成的 API Key（`user_xxx`），填进本插件加密保存
    - Key 也可以直接填进本插件保存（加密存储，不进 DSH 凭证）
 3. 回到主界面，右下角就会出现用量卡片，每 30s 自动刷新
 

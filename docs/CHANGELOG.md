@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.6.0（2026-08-31）
+
+### 大功能
+- **新增提供方 Command Code（订阅+余额混合卡）**：只能通过「添加自定义提供方」添加（Command Code 非 DSH 内置提供方，pi-ai 注册表无对应 provider，故不出现在「从 DSH 导入提供方」列表）
+  - 新适配器 `commandcode-credits`：官方双端点查询（`/alpha/billing/credits` + `/alpha/billing/subscriptions`），只填 API Key（加密存插件私有库，不经 DSH 凭证）
+  - **新卡片类型**：主数字 = 月已用百分比，副行「已用 $X / $Y + 剩余 $Z」，下方 5 小时 / 周 / 月三窗口进度条（月窗口 = 计划总额 − 剩余推算，planId 映射表；未知计划安全降级）
+  - 订阅端点失败自动降级（保留窗口+剩余）；401/403 复用现有分类
+  - 5 档计划映射：individual-go($10) / goat($70) / pro($80) / max($150) / ultra($300)
+
+### 修复
+- **Command Code 卡片 5 小时/周窗口的「重置倒计时」恒为空白**：host 窗口字段名 `resetAt` 与 client `WindowRow` 读取的 `resetsAt` 不一致（现统一为 `resetsAt`，client 兼容读 `resetAt` 兜底旧数据）；补 20b 回归断言
+- 出站请求 `user-agent` 版本号残留 0.5.0 → 改为从 `package.json` 读取（单一来源，升版不再漏改）
+- Command Code 订阅端点（次要端点）超时从 15s 缩短为 5s（可经 `subscriptionTimeoutMs` 配置）：credits 秒回而 subscriptions 卡死时，卡片不再干等全局超时；补 20f 场景验证
+- 订阅失败/未知计划导致月% 推算不出时，Command Code 卡片隐藏月窗口行（此前渲染「--% + 0% 空进度条」，易误读为「还没开始用」）
+
+### 小功能
+- 提供方设置：自定义表单默认选中 Command Code；卡片/菜单用文字「CC」logo 占位（无官方素材，后续可换）
+
+### 文档
+- 新增 `docs/commandcode-support-plan.md`：方案评估（现状/API 能力/双端点混合模型/备选对比/待确认决策）
+
 ## v0.5.2（2026-08-30）
 
 ### 重构

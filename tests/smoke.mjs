@@ -74,7 +74,7 @@ let tplText = null
 const tplRes = { writeHead: (c, h) => { tplRes.code = c }, end: (t) => { tplText = t } }
 await templatesRoute.handler({ method: 'GET', socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:3080' } }, tplRes)
 const tpl = JSON.parse(tplText)
-if (!tpl.ok || tpl.items.length !== 2) throw new Error('templates mismatch: ' + tplText)
+if (!tpl.ok || tpl.items.length !== 3) throw new Error('templates mismatch: ' + tplText)
 if (tpl.items.some((i) => i.credentialRef !== undefined)) throw new Error('templates leak secrets')
 console.log('templates:', JSON.stringify(tpl.items.map((i) => i.id)))
 let tplForbidText = null
