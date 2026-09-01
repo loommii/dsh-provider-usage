@@ -79,7 +79,8 @@ console.log('场景 1：成功解析')
   }
   await m.call('127.0.0.1', undefined, 'GET', '127.0.0.1:3080', '/api/provider-usage/query?adapter=usage-percent&ref=OPENCODE_GO_API_KEY&noCache=1')
   globalThis.fetch = m.wrapFetch(res200())
-  assert(ua === 'dsh-provider-usage/0.6.0', 'user-agent 版本 = package.json 版本（0.6.0）')
+  const pkgVersion = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version
+  assert(ua === 'dsh-provider-usage/' + pkgVersion, 'user-agent 版本 = package.json 版本（' + pkgVersion + '）')
 }
 
 console.log('场景 2：30s 缓存复用')
@@ -385,6 +386,8 @@ console.log('场景 20b：Command Code 双端点成功 → 订阅使用量 + 剩
     assert(j.totalQuota === 70, 'totalQuota 来自计划映射')
     assert(j.nextResetAt === '2026-09-27T03:14:04.000Z', '月重置 = currentPeriodEnd')
     assert(j.monthly && Math.abs(j.monthly.usedPct - 10.0811) < 1e-3, '月已用百分比 (70−62.94)/70')
+    // v0.7.0：月剩余百分比 = 剩余/总额，3 位小数向下取整（62.9432148907/70 = 89.91887…% → 89.918）
+    assert(j.monthly.remainingPct === 89.918, '月剩余百分比 3 位小数向下取整')
     assert(j.windows.fiveHour.usedPct !== null && j.windows.weekly.usedPct !== null, '5h/周窗口')
     assert(j.windows.fiveHour.usedPct > 0 && j.windows.fiveHour.usedPct < 3, '5h 百分比 ~2.6%')
     assert(j.windows.weekly.usedPct > 20 && j.windows.weekly.usedPct < 21, '周百分比 ~20.2%')
@@ -420,7 +423,7 @@ console.log('场景 20c：Command Code 订阅端点失败 → 降级（窗口+�
     const j = await m.call('127.0.0.1', m.wrapFetch(ccStub(CC_CREDITS, null, 500)), 'GET', '127.0.0.1:3080', CC_QS)
     assert(j.ok === true && j.error === null, '订阅端点失败不致命')
     assert(j.planName === 'Command Code', '降级为通用名')
-    assert(j.totalQuota === null && j.monthly.usedPct === null, '无计划 → 月% 降级 null')
+    assert(j.totalQuota === null && j.monthly.usedPct === null && j.monthly.remainingPct === null, '无计划 → 月% 降级 null')
     assert(j.remaining === 62.9432148907 && j.windows.fiveHour.usedPct !== null, '剩余与窗口仍在')
   } finally {
     if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
@@ -447,7 +450,7 @@ console.log('场景 20d：Command Code 未知 planId → 降级不崩')
     const sub = Object.assign({}, CC_SUB, { data: Object.assign({}, CC_SUB.data, { planId: 'individual-future-plan' }) })
     const j = await m.call('127.0.0.1', m.wrapFetch(ccStub(CC_CREDITS, sub)), 'GET', '127.0.0.1:3080', CC_QS)
     assert(j.ok === true, '未知计划不崩溃')
-    assert(j.totalQuota === null && j.monthly.usedPct === null, '未知计划 → 月% null')
+    assert(j.totalQuota === null && j.monthly.usedPct === null && j.monthly.remainingPct === null, '未知计划 → 月% null')
     assert(j.planName === 'Command Code', '未知计划通用名')
   } finally {
     if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
@@ -523,6 +526,50 @@ console.log('场景 20f：Command Code 订阅端点挂起 → 短超时 abort，
     assert(j.ok === true && j.error === null, '订阅端点挂起不致命（降级成功）')
     assert(j.totalQuota === null && j.planName === 'Command Code', '降级：无计划名/月%')
     assert(elapsed < 2000, '整体在订阅短超时后返回（' + Math.round(elapsed) + 'ms < 2000ms，未等全局 10s）')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
+}
+
+console.log('场景 20g：Command Code 月剩余百分比边界（向下取整 / 满 / 空 / 超额钳 0）')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-ccpct-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const { createSecureStore } = await import('../lib/secure-store.js')
+    const priv = createSecureStore(pathMod.join(tmp, 'provider-usage'))
+    await priv.init()
+    await priv.set('CC_KEY', 'sk-cc-vault-12345678')
+    const creditsWith = (monthlyCredits) =>
+      Object.assign({}, CC_CREDITS, { credits: Object.assign({}, CC_CREDITS.credits, { monthlyCredits }) })
+    // 每个子场景独立 mount：绕开 30s 查询缓存（同 ref 连续查询会命中缓存返回首个结果）
+    const query = async (monthlyCredits) => {
+      const m = mount({
+        settings: { get: () => ({ providers: {} }) },
+        credentials: { resolve: async () => null },
+      })
+      return m.call('127.0.0.1', m.wrapFetch(ccStub(creditsWith(monthlyCredits))), 'GET', '127.0.0.1:3080', CC_QS)
+    }
+    // GOAT 计划总额 70；1/70 = 1.428571…% → floor(1428.571)/1000 = 1.428
+    const j1 = await query(1)
+    assert(j1.monthly.remainingPct === 1.428, '1/70 → 1.428（向下取整，非四舍五入 1.429）')
+    assert(j1.monthly.usedPct !== null && j1.monthly.usedPct > 98.5 && j1.monthly.usedPct < 98.6, 'usedPct 仍为已用口径')
+    // 69.999/70 = 99.99857…% → 99.998
+    const j2 = await query(69.999)
+    assert(j2.monthly.remainingPct === 99.998, '69.999/70 → 99.998')
+    // 刚好用完：0/70 → 0（钳下界）
+    const j3 = await query(0)
+    assert(j3.monthly.remainingPct === 0, '剩余 0 → 0%')
+    // 满额未用：70/70 → 100
+    const j4 = await query(70)
+    assert(j4.monthly.remainingPct === 100, '满额 → 100%')
+    // 超额（剩余为负，超额使用）→ 钳上界 0，不出负百分比
+    const j5 = await query(-5)
+    assert(j5.monthly.remainingPct === 0, '超额（剩余负）→ 钳 0')
   } finally {
     if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
   }
@@ -724,7 +771,7 @@ console.log('场景 26：今天聚合（只扫今天变过的文件）→ totals
   assert(j.ok === true && j.detected === true && j.days === 1, "ok/detected/days=1")
   assert(j.totals.requests === 2 && j.totals.inputTokens === 200 && j.totals.outputTokens === 100 && j.totals.cacheReadTokens === 400, "累计 2 条消息")
   assert(j.totals.realTotalTokens === 700 && Math.abs(j.totals.cacheHitRate - 400 / 600) < 1e-9, "realTotal/命中率")
-  assert(JSON.stringify(j.providers) === JSON.stringify(["opencode-go"]) && j.byModel.m1.requests === 2, "providers/byModel")
+  assert(JSON.stringify(j.providers) === JSON.stringify(["opencode-go"]) && j.byModel["opencode-go"].m1.requests === 2, "providers/byModel（v0.7.0 按提供方嵌套）")
   const file = pathMod.join(env.home, "provider-usage", "daily-stats", "2026-08-25.json")
   const stored = JSON.parse(await fsxMod.readFile(file, "utf8"))
   assert(stored.byProvider["opencode-go"].requests === 2 && stored.date === "2026-08-25", "天文件已落盘（全量）")
@@ -742,9 +789,10 @@ console.log('场景 27：provider 过滤')
   ], T_DAY + 5000)
   const go = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
   assert(go.totals.requests === 2 && go.totals.inputTokens === 20, "opencode-go 只算自己的")
+  assert(go.byModel["opencode-go"].a.requests === 2 && !go.byModel.opencode && !go.byModel.b, "选中提供方：模型汇总恒嵌套且只见自己的模型（v0.7.0）")
   const all = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
   assert(all.totals.requests === 3, "全部 provider requests=3")
-  assert(all.providers.length === 2 && all.byModel.b.requests === 1, "providers 枚举/byModel 全量")
+  assert(all.providers.length === 2 && all.byModel.opencode.b.requests === 1 && all.byModel["opencode-go"].a.requests === 2, "providers 枚举/byModel 嵌套全量")
 }
 
 console.log('场景 28：归属回退 request/header + chunk 不双计')
@@ -758,7 +806,7 @@ console.log('场景 28：归属回退 request/header + chunk 不双计')
     chunk({ inputTokens: 7, outputTokens: 8, cacheReadTokens: 9 }, T_DAY + 1000),
   ], T_DAY + 5000)
   const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
-  assert(j.totals.requests === 1 && j.totals.inputTokens === 7 && j.byModel.fm.requests === 1, "回退 header；chunk 不双计")
+  assert(j.totals.requests === 1 && j.totals.inputTokens === 7 && j.byModel["opencode-go"].fm.requests === 1, "回退 header；chunk 不双计（嵌套形态）")
 }
 
 console.log('场景 29：历史封存 —— 昨天数据不重算，只有今天变更才重新统计')
@@ -907,6 +955,155 @@ console.log('场景 34：增量解码 —— 文件追加新帧只算新增，mt
   globalThis.Date.now = () => T_DAY + 93000
   const j4 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
   assert(j4.totals.inputTokens === 60, "mtime 再变：增量补到 60")
+}
+
+console.log('场景 35：byModel 按提供方过滤 —— 汇总表随提供方选择切换（v0.7.0 回归）')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  // 两个提供方用同一个模型名 glm，外加 command-code 独有 sonnet
+  await writeSession(env.sessions, "s1", [
+    msg("opencode-go", "glm", { inputTokens: 10, outputTokens: 20, cacheReadTokens: 30 }, T_DAY + 1000),
+    msg("command-code", "glm", { inputTokens: 100, outputTokens: 200, cacheReadTokens: 300 }, T_DAY + 2000),
+    msg("command-code", "sonnet", { inputTokens: 7, outputTokens: 7, cacheReadTokens: 0 }, T_DAY + 3000),
+  ], T_DAY + 5000)
+  const go = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(go.totals.inputTokens === 10 && go.byModel["opencode-go"].glm.requests === 1, "选中 opencode-go：只算自己的 glm（10）")
+  assert(!go.byModel["command-code"] && !go.byModel.sonnet, "选中提供方：其它提供方/其模型不出现")
+  const cc = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=command-code")
+  assert(cc.totals.inputTokens === 107 && cc.byModel["command-code"].glm.requests === 1 && cc.byModel["command-code"].sonnet.requests === 1, "切换 command-code：glm（100）+ sonnet（7）")
+  const all = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(all.byModel["opencode-go"].glm.inputTokens === 10 && all.byModel["command-code"].glm.inputTokens === 100 && all.byModel["command-code"].sonnet.requests === 1, "全部：同名模型按提供方分列展示")
+}
+
+function dayKeyOf(ms) {
+  const d = new Date(ms)
+  const pad = (x) => String(x).padStart(2, "0")
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+}
+const legacyFlatDay = (day, deps) => ({ version: 1, date: day, deps, byProvider: { "opencode-go": { requests: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 0 } }, byModel: { glm: { requests: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 0 } } })
+
+console.log('场景 36a：v0.6.1 扁平天文件带 deps → 重折恢复提供方归属，全部=单提供方一致（v0.7.0 验收问题回归）')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  await fsxMod.mkdir(dailyDir, { recursive: true })
+  const yday = dayKeyOf(T_DAY - 86400000)
+  // v0.6.1 真实形态：扁平 byModel + deps 指向会话文件
+  const oldFile = pathMod.join(env.sessions, "old", "session.jsonl.zstd")
+  await writeSession(env.sessions, "old", [msg("opencode-go", "glm", { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0 }, T_DAY - 86400000 + 3600000)], T_DAY - 86400000 + 5000)
+  await fsxMod.writeFile(pathMod.join(dailyDir, yday + ".json"), JSON.stringify(legacyFlatDay(yday, { [oldFile]: T_DAY - 86400000 + 5000 })), "utf8")
+  await fsxMod.writeFile(pathMod.join(dailyDir, ".backfilled"), JSON.stringify({ version: 2, at: 0 }), "utf8") // 新版哨兵：不走全量重折
+  await writeSession(env.sessions, "s1", [msg("command-code", "sonnet", { inputTokens: 7, outputTokens: 7, cacheReadTokens: 0 }, T_DAY + 1000)], T_DAY + 5000)
+  const all = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(all.totals.inputTokens === 107 && all.providers.length === 2, "totals/providers 不变")
+  assert(all.byModel["opencode-go"] && all.byModel["opencode-go"].glm.inputTokens === 100, "重折恢复：glm 归回 opencode-go")
+  assert(!all.byModel.unknown, "不再落 unknown 桶")
+  const go = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(go.totals.inputTokens === 100 && go.byModel["opencode-go"].glm.inputTokens === 100, "选中 opencode-go：模型表可见且与全部一致")
+  const stored = JSON.parse(await fsxMod.readFile(pathMod.join(dailyDir, yday + ".json"), "utf8"))
+  assert(stored.byModel["opencode-go"] && !stored.byModel.glm, "天文件已重写为嵌套形态")
+}
+
+console.log('场景 36b：v0.6.1 扁平天文件 deps 为空 → 无法重折，兜底 unknown 桶仍可见')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  await fsxMod.mkdir(dailyDir, { recursive: true })
+  const yday = dayKeyOf(T_DAY - 86400000)
+  await fsxMod.writeFile(pathMod.join(dailyDir, yday + ".json"), JSON.stringify(legacyFlatDay(yday, {})), "utf8")
+  await fsxMod.writeFile(pathMod.join(dailyDir, ".backfilled"), JSON.stringify({ version: 2, at: 0 }), "utf8")
+  await writeSession(env.sessions, "s1", [msg("command-code", "sonnet", { inputTokens: 7, outputTokens: 7, cacheReadTokens: 0 }, T_DAY + 1000)], T_DAY + 5000)
+  const all = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(all.totals.inputTokens === 107 && all.providers.includes("opencode-go"), "旧扁平数据照常计入 totals/providers")
+  assert(all.byModel.unknown && all.byModel.unknown.glm.inputTokens === 100, "无 deps 可重折 → 迁入 unknown 提供方桶")
+  assert(all.byModel["command-code"].sonnet.inputTokens === 7, "新嵌套数据各归各桶")
+  const go = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage?provider=opencode-go")
+  assert(go.totals.inputTokens === 100 && !go.byModel["opencode-go"], "选中旧数据提供方：totals 有值，模型行落 unknown 桶")
+}
+
+console.log('场景 37：v0.6.1 哨兵（version 1）→ 触发一次性全量重折，历史归属全部恢复')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  await fsxMod.mkdir(dailyDir, { recursive: true })
+  const yday = dayKeyOf(T_DAY - 86400000)
+  // 历史：3 天前 + 1 天前（v0.6.1 时代的会话，天文件缺失/过时也无妨——重折以会话文件为准）
+  await writeSession(env.sessions, "d3", [msg("opencode-go", "glm", { inputTokens: 30, outputTokens: 0, cacheReadTokens: 0 }, T_DAY - 3 * 86400000 + 3600000)], T_DAY - 3 * 86400000 + 5000)
+  await writeSession(env.sessions, "d1", [msg("command-code", "sonnet", { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0 }, T_DAY - 86400000 + 3600000)], T_DAY - 86400000 + 5000)
+  // 只留 v1 哨兵（v0.6.1 所写），天文件全缺 → hasBackfilled(版本判定) = false
+  await fsxMod.writeFile(pathMod.join(dailyDir, ".backfilled"), JSON.stringify({ version: 1, at: 0 }), "utf8")
+  const j = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j.totals.inputTokens === 130 && j.days === 3, "v1 哨兵触发全量重折（30+100）")
+  assert(j.byModel["opencode-go"] && j.byModel["opencode-go"].glm.inputTokens === 30, "重折恢复：glm 归 opencode-go")
+  assert(j.byModel["command-code"] && j.byModel["command-code"].sonnet.inputTokens === 100, "重折恢复：sonnet 归 command-code")
+  assert(!j.byModel.unknown, "无 unknown 兜底数据")
+  // 哨兵已升级为 v2：第二次调用不再重折
+  const sent = JSON.parse(await fsxMod.readFile(pathMod.join(dailyDir, ".backfilled"), "utf8"))
+  assert(Number(sent.version) === 2, "哨兵已写为 version 2")
+}
+
+console.log('场景 38：重置本地统计 —— 删派生缓存 + 清 30s 缓存，下次查询自动重算（不触碰会话原文）')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "s1", [
+    msg("opencode-go", "m", { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 }, T_DAY + 1000),
+  ], T_DAY + 5000)
+  const j1 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j1.totals.inputTokens === 10 && j1.cached === false, "重置前：统计正常")
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  const before = (await fsxMod.readdir(dailyDir)).length
+  assert(before >= 3, "派生文件已存在（天文件+cursors+哨兵）")
+  // POST 重置
+  const j2 = await m.call("127.0.0.1", undefined, "POST", "127.0.0.1:3080", "/api/provider-usage/reset-local-stats")
+  assert(j2.ok === true && j2.removed >= 3, "重置成功，返回清除文件数（" + j2.removed + "）")
+  const after = (await fsxMod.readdir(dailyDir)).length
+  assert(after === 0, "daily-stats 目录已清空")
+  const sess = pathMod.join(env.sessions, "s1", "session.jsonl.zstd")
+  assert(await fsxMod.stat(sess).then(() => true, () => false), "会话原文完好（只读不动）")
+  // 30s 缓存已清：同窗口内重查是新数据（removed=1 天文件重新生成）
+  const j3 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j3.ok === true && j3.totals.inputTokens === 10 && j3.cached === false, "重置后查询：从会话原文重算，数值一致")
+  const after2 = (await fsxMod.readdir(dailyDir)).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+  assert(after2.length === 1, "天文件已自动重建")
+}
+
+console.log('场景 39：重置对损坏天文件有效 —— 投毒天文件被清除，重查从会话原文重建')
+{
+  const env = await localEnv()
+  const m = mount({ rawConfig: { sessionsDir: env.sessions } })
+  globalThis.Date.now = () => T_DAY
+  await writeSession(env.sessions, "s1", [
+    msg("opencode-go", "m", { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 }, T_DAY + 1000),
+  ], T_DAY + 5000)
+  // 正常首查：天文件落盘并进入天缓存
+  const j1 = await m.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j1.totals.inputTokens === 10, "重置前：10")
+  // 投毒：篡改盘上天文件；真实损坏场景 = 进程重启后天缓存为空、读到坏盘文件 → 重新挂载实例复现
+  const dailyDir = pathMod.join(env.home, "provider-usage", "daily-stats")
+  const dayFile = pathMod.join(dailyDir, dayKeyOf(T_DAY) + ".json")
+  await fsxMod.writeFile(dayFile, JSON.stringify({ version: 2, date: dayKeyOf(T_DAY), deps: {}, byProvider: { "opencode-go": { requests: 1, inputTokens: 999, outputTokens: 0, cacheReadTokens: 0 } }, byModel: { "opencode-go": { m: { requests: 1, inputTokens: 999, outputTokens: 0, cacheReadTokens: 0 } } } }), "utf8")
+  globalThis.Date.now = () => T_DAY + 31000
+  const m2 = mount({ rawConfig: { sessionsDir: env.sessions } }) // 新实例 = 天缓存为空（模拟重启）
+  const j2 = await m2.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j2.totals.inputTokens === 999, "投毒生效（重启后读到损坏天文件，复现损坏场景）")
+  // 重置：必须把内存天缓存一并清掉，重查从会话原文重建
+  globalThis.Date.now = () => T_DAY + 62000
+  const j3 = await m2.call("127.0.0.1", undefined, "POST", "127.0.0.1:3080", "/api/provider-usage/reset-local-stats")
+  assert(j3.ok === true && j3.removed >= 1, "重置成功")
+  const j4 = await m2.call("127.0.0.1", undefined, "GET", "127.0.0.1:3080", "/api/provider-usage/local-usage")
+  assert(j4.totals.inputTokens === 10 && j4.byModel["opencode-go"].m.inputTokens === 10, "重置后：从会话原文重建为 10（投毒数据被清除）")
+  const stored = JSON.parse(await fsxMod.readFile(dayFile, "utf8"))
+  assert(stored.byProvider["opencode-go"].inputTokens === 10, "天文件已重建为正确数据")
 }
 
 if (failed > 0) { console.error('\nFAILED: ' + failed + ' 项'); process.exit(1) }

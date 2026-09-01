@@ -1,5 +1,5 @@
 // daily-stats 模块单测：日期键/范围、按天折叠、扫描过滤、天文件读写/损坏恢复、deps 校验。
-import { dayKey, dayStartMs, addDays, dayRange, foldEventsByDay, foldEventsByDays, mergeTotals, scanSessionFiles, readSessionFile, parseEvents, readDayFile, writeDayFile, validateDeps, listDayFiles, _setDecoderForTests } from '../lib/daily-stats.js'
+import { dayKey, dayStartMs, addDays, dayRange, foldEventsByDay, foldEventsByDays, mergeTotals, scanSessionFiles, readSessionFile, parseEvents, readDayFile, writeDayFile, validateDeps, listDayFiles, hasBackfilled, writeBackfilled, resetDailyStats, _setDecoderForTests } from '../lib/daily-stats.js'
 import { mkdtemp, writeFile, readdir, mkdir, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -33,7 +33,7 @@ console.log("daily-stats：按天折叠（归属/回退/时间窗口/chunk 忽�
   ]
   const f = foldEventsByDay(evs, start, end, null)
   assert(f.byProvider["opencode-go"].requests === 2 && f.byProvider["opencode-go"].inputTokens === 11, "provider 聚合（chunk 不计/窗口外不计）")
-  assert(f.byModel.fm.inputTokens === 1 && f.byModel.m1.inputTokens === 10, "模型回退 header / 显式 source")
+  assert(f.byModel["opencode-go"].fm.inputTokens === 1 && f.byModel["opencode-go"].m1.inputTokens === 10, "模型回退 header / 显式 source（byModel 按提供方嵌套）")
   const byDays = foldEventsByDays(evs, null)
   const keys = Object.keys(byDays)
   assert(keys.length === 2, "foldEventsByDays 按天分组（两天）")
@@ -46,13 +46,16 @@ console.log("daily-stats：按天折叠（归属/回退/时间窗口/chunk 忽�
   assert(noTime.byProvider.p.requests === 1, "time 缺失按当天计入")
 }
 
-console.log("daily-stats：mergeTotals 同键累加")
+console.log("daily-stats：mergeTotals 同键累加（含 v0.6.1 扁平 byModel 双向迁移）")
 {
   const dst = { byProvider: {}, byModel: {} }
   mergeTotals(dst, { byProvider: { a: { requests: 1, inputTokens: 10, outputTokens: 1, cacheReadTokens: 0 } }, byModel: { m: { requests: 1, inputTokens: 10, outputTokens: 1, cacheReadTokens: 0 } } })
   mergeTotals(dst, { byProvider: { a: { requests: 2, inputTokens: 20, outputTokens: 2, cacheReadTokens: 1 } }, byModel: { m: { requests: 2, inputTokens: 20, outputTokens: 2, cacheReadTokens: 1 } } })
   assert(dst.byProvider.a.requests === 3 && dst.byProvider.a.inputTokens === 30 && dst.byProvider.a.cacheReadTokens === 1, "byProvider 累加")
-  assert(dst.byModel.m.outputTokens === 3, "byModel 累加")
+  assert(dst.byModel.unknown.m.outputTokens === 3, "v1 扁平 byModel 归 unknown 提供方桶累加")
+  const dst2 = { byProvider: {}, byModel: { p1: { mA: { requests: 1, inputTokens: 1, outputTokens: 0, cacheReadTokens: 0 } } } }
+  mergeTotals(dst2, { byProvider: {}, byModel: { p1: { mA: { requests: 1, inputTokens: 2, outputTokens: 0, cacheReadTokens: 0 }, mB: { requests: 1, inputTokens: 5, outputTokens: 0, cacheReadTokens: 0 } }, p2: { mC: { requests: 1, inputTokens: 7, outputTokens: 0, cacheReadTokens: 0 } } } })
+  assert(dst2.byModel.p1.mA.inputTokens === 3 && dst2.byModel.p1.mB.inputTokens === 5 && dst2.byModel.p2.mC.inputTokens === 7, "嵌套 byModel 按提供方分桶累加")
 }
 
 console.log("daily-stats：天文件写入/读取（原子）/损坏恢复/列举")
@@ -94,6 +97,26 @@ console.log("daily-stats：scanSessionFiles 过滤与排序 + deps 校验")
   await utimes(fb, new Date(t2 + 5000), new Date(t2 + 5000))
   const v2 = await validateDeps({ [fb]: t2 })
   assert(v2.changed.length === 1, "deps 校验：mtime 变化识别")
+}
+
+console.log("daily-stats：回填哨兵版本判定 + resetDailyStats 重置")
+{
+  const dir = await mkdtemp(join(tmpdir(), "pu-reset-"))
+  assert(await hasBackfilled(dir) === false, "无哨兵 → 未回填")
+  await writeBackfilled(dir) // 当前版本（2）
+  assert(await hasBackfilled(dir) === true, "v2 哨兵 → 已回填")
+  await writeFile(join(dir, ".backfilled"), JSON.stringify({ version: 1, at: 0 }), "utf8")
+  assert(await hasBackfilled(dir) === false, "v1 哨兵（v0.6.1 所写）→ 视为未回填，触发重折")
+  // resetDailyStats：只删派生文件
+  await writeDayFile(dir, "2026-08-26", { version: 2, date: "2026-08-26", deps: {}, byProvider: {}, byModel: {} })
+  await writeFile(join(dir, "cursors.json"), JSON.stringify({ version: 1, files: {} }), "utf8")
+  await writeFile(join(dir, "keep-me.txt"), "not-stats", "utf8")
+  const removed = await resetDailyStats(dir)
+  assert(removed === 3, "清除 天文件+cursors+哨兵（" + removed + "）")
+  const files = await readdir(dir)
+  assert(files.length === 1 && files[0] === "keep-me.txt", "目录内非统计文件保留")
+  assert(await resetDailyStats(dir) === 0, "目录不存在时返回 0（幂等）")
+  assert(await resetDailyStats(join(dir, "no-such-dir")) === 0, "空目录重置为 0")
 }
 
 console.log("daily-stats：identity 解码（测试注入）")
