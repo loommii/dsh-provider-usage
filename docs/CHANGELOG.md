@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.8.0（2026-09-02）
+
+### 兼容性修复：适配 dsh 0.1.2-alpha（破坏性变更）
+
+本次 dsh `0.1.1-rc.2 → 0.1.2-alpha.4` 重构后，插件出现两类症状：升级当天 `dsh web` 启动即崩
+（`duplicate loader entry id: provider-usage`），重新安装后变为 **host 半区正常（7 条 API 路由全部注册）
+但 Web UI 静默失联**（设置页无「用量中心」、无常驻卡片）。两个问题的根源都在插件自身的
+「包名迁移残留」与 alpha 新的客户端发现机制不兼容，本版全部修复：
+
+- **`cordis.patch.yml` 的 entry `name` 改为正式包名 `@loommii/dsh-provider-usage`**
+  - v0.6.0 包名迁移（`dsh-provider-usage` → `@loommii/dsh-provider-usage`）时漏改了此文件，
+    此后一直靠 profile `node_modules` 里改名前遗留的旧名符号链接 `dsh-provider-usage → 工作区`
+    才能解析到包（rc.2 环境下侥幸可用）
+  - alpha.4 的客户端扫描（`dsh-client-modules` node 半区 `nearestPackage`）从 loader entry
+    的模块位置向上查找 package.json，且要求 `name === entry 名`；旧名在重装后解析失败 →
+    包被判定为「非客户端包」→ 永不进 `window.__DSH_BOOT__` 组合图 → UI 静默消失（host 不受影响）
+  - 升级首日的 `duplicate loader entry id` 崩溃亦与残留链接相关（旧名/新名两条路径同时进树，
+    loader `EntryGroup.update` 对同 id 双行 fail-loud）；清理残留链接 + 本修复后消除
+- **删除 `dsh.client.inject: ["@deepseek-ai/dsh-client-runtime"]` 死引用**
+  - alpha 重构将 `dsh-client-runtime` 并入 `dsh-client-modules`，该包已不存在；
+    插件 client 半区从未 require 过 runtime 的任何导出，声明本就多余
+  - 两侧加载器对 graph 外的 inject 静默跳过，故这是卫生项而非故障源
+- **`lib/client.js` 的 `__ModuleLoader__.load` 注册 id 同步改为 `@loommii/dsh-provider-usage`**
+  - alpha 的 boot graph 行 id = 包名，`serveBundle` 按 id 应答 combo bundle；注册 id 与
+    graph 行不一致时模块系统找不到 factory（对官方包此场景 fail-loud，对插件即静默失联）
+- **peerDependencies 放宽**：`@deepseek-ai/dsh-host-webserver` `^0.1.0-rc.6` → `>=0.1.0-rc.6`
+  （npm prerelease semver 规则下 `^` 不匹配 `0.1.2-alpha.*`，消除安装时 peer 警告）
+
+### 兼容性核对（对 dsh-v0.1.2-alpha.4 源码逐项验证）
+
+- `ctx.webServer.register({kind:'exact'|'prefix', path, handler(req,res)})` 契约不变（`dsh-host-webserver` 健在）
+- `window.__ModuleLoader__.load({id, factory})` 仍是注册协议；`exports.inject`（`['slots']`）仍被
+  vendored cordis Loader 消费（`Cr.resolve(n.inject)`）
+- 平台 seed 词 `react` / `react-dom/client` / `@deepseek-ai/cordis` / `dsh-client-ui-slots` 全保留
+  （React 仍为 18.3.1）
+- `settings.section` 插槽契约保留（`dsh-client-ui-settings` contract/slots.ts）
+- 会话文件格式：JSONL 后端仍默认（`.jsonl.zstd`、`SESSION_FORMAT_VERSION = 0`、目录布局、
+  `assistant/message` → `data.usage{inputTokens,outputTokens,cacheReadTokens}` 事件行全部不变），
+  本地 Token 统计不受影响；alpha.3 已移除可选 SQLite 后端，此前的前瞻风险解除
+- alpha.4 新增的「web 请求一次性 fetch 审批（SSRF 防护）」为 web 客户端侧，不影响 host 侧出站查询
+
+### 用户升级指引（从 ≤0.7.0 升级到 0.8.0）
+
+若升级 dsh 后曾出现 `duplicate loader entry id: provider-usage`，profile 的 `node_modules`
+里可能残留改名前的旧名符号链接。重装插件即可清理：
+
+```sh
+dsh plugin --profile web remove @loommii/dsh-provider-usage
+dsh plugin --profile web add github:loommii/dsh-provider-usage   # 或 npm: @loommii/dsh-provider-usage
+# 若 node_modules 下仍有 dsh-provider-usage/（旧名，非 @loommii scope）残留目录/链接，手动删除
+```
+
 ## v0.7.0（2026-09-01）
 
 ### 小功能

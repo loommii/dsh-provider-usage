@@ -1,8 +1,16 @@
 # dsh-provider-usage — DSH「用量中心」
 
-> 当前版本 **v0.7.0** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
+> 当前版本 **v0.8.0** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
 
 DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片，实时显示你的 AI 服务用量 / 余额，不用再打开网页查；附带本地 Token 统计页，不联网也能看自己今天用了多少。
+
+## v0.8.0 更新摘要（适配 dsh 0.1.2-alpha）
+
+- **适配 dsh `0.1.2-alpha` 破坏性重构**：修复升级后「设置页无用量中心 / 卡片消失」与
+  `duplicate loader entry id` 启动崩溃（根因：v0.6.0 包名迁移时 `cordis.patch.yml` 与
+  client 注册 id 仍用旧名，叠加 alpha 新的客户端发现机制导致静默失联）
+- host 侧 API 契约、会话文件解析、平台注入（react / slots）经逐项核对在 alpha.4 全部兼容
+- 完整变更与用户升级指引见 [CHANGELOG](docs/CHANGELOG.md)
 
 ## v0.6.0 更新摘要
 

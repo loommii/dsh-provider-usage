@@ -1,7 +1,10 @@
 # dsh-provider-usage M1: 插入插件行（自动 reconcile 进 profile bundles）
+# v0.8.0: name 使用正式包名 @loommii/dsh-provider-usage（与 package.json 一致）。
+# 0.7.0 及以前误用改名前的旧名 dsh-provider-usage，在 dsh 0.1.2-alpha 上
+# 只能靠 profile node_modules 里的旧名残留符号链接解析——重装后插件即失联。
 - insert:
     - id: provider-usage
-      name: dsh-provider-usage
+      name: '@loommii/dsh-provider-usage'
       config:
         baseUrl: https://opencode.ai/zen/go   # {{baseUrl}}/v1/usage 即官方 usage 接口
         timeoutMs: 15000
