@@ -29,11 +29,20 @@ function mount(overrides = {}) {
   apply(ctx, { baseUrl: 'https://opencode.ai/zen/go', timeoutMs: 5000, ...(overrides.rawConfig || {}) })
   route = routes.find((r) => r.path === '/api/provider-usage/opencode-go')
   if (!route) throw new Error('usage route not registered')
-  async function call(remote = '127.0.0.1', stub, method = 'GET', host = '127.0.0.1:3080', url = null) {
+  async function call(remote = '127.0.0.1', stub, method = 'GET', host = '127.0.0.1:3080', url = null, rawBody = null) {
     if (stub) globalThis.fetch = stub
     let text = null
     const res = { writeHead: (c, h) => { res.code = c }, end: (t) => { text = t } }
     const req = { method, socket: { remoteAddress: remote }, headers: { host }, url }
+    if (rawBody !== null) {
+      // 极简可读流 mock：data 同步发完整 body，end 异步触发（readBodyJson 先收 data 再收 end）
+      req.headers['content-type'] = 'application/json'
+      req.on = (ev, cb) => {
+        if (ev === 'data') cb(rawBody)
+        else if (ev === 'end') setTimeout(cb, 0)
+        else if (ev === 'error') { /* ignore */ }
+      }
+    }
     const path = url ? url.split('?')[0] : '/api/provider-usage/opencode-go'
     const target = routes.find((r) => r.path === path) || route
     await target.handler(req, res)
@@ -1104,6 +1113,70 @@ console.log('场景 39：重置对损坏天文件有效 —— 投毒天文件�
   assert(j4.totals.inputTokens === 10 && j4.byModel["opencode-go"].m.inputTokens === 10, "重置后：从会话原文重建为 10（投毒数据被清除）")
   const stored = JSON.parse(await fsxMod.readFile(dayFile, "utf8"))
   assert(stored.byProvider["opencode-go"].inputTokens === 10, "天文件已重建为正确数据")
+}
+
+console.log('场景 40：提供方清单持久化（v0.8.0 修复「重启后清单被静默重建」）')
+{
+  const os = await import('node:os')
+  const fsx = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const prev = process.env.DSH_HOME
+  const tmp = await fsx.mkdtemp(pathMod.join(os.tmpdir(), 'pu-prov-'))
+  process.env.DSH_HOME = tmp
+  try {
+    const list = [
+      { id: 'opencode-go', name: 'OpenCode Go', adapter: 'usage-percent', ref: 'OPENCODE_GO_API_KEY', source: 'dsh', type: 'import', paused: false },
+      { id: 'commandcode-credits-1788142304061', name: 'Command Code', adapter: 'commandcode-credits', ref: 'commandcode-credits-1788142304061', source: 'vault', type: 'manual', paused: false },
+    ]
+    const m = mount()
+    const provRoute = m.getRoutes().find((r) => r.path === '/api/provider-usage/providers')
+    assert(!!provRoute, '/api/provider-usage/providers 路由已注册')
+
+    // 1) 初次 GET：文件缺失 → ok + providers:null（客户端走一次性迁移）
+    const g0 = await m.call('127.0.0.1', undefined, 'GET', '127.0.0.1:3080', '/api/provider-usage/providers')
+    assert(g0.ok === true && g0.providers === null && g0.exists === false, '初次 GET：缺失返回 null + exists:false')
+
+    // 2) POST 保存（模拟客户端迁移/写穿透）→ 落盘 providers.json
+    const p1 = await m.call('127.0.0.1', undefined, 'POST', '127.0.0.1:3080', '/api/provider-usage/providers', JSON.stringify({ providers: list }))
+    assert(p1.ok === true && p1.providers.length === 2, 'POST 保存成功')
+    const file = pathMod.join(tmp, 'provider-usage', 'providers.json')
+    const doc = JSON.parse(await fsxMod.readFile(file, 'utf8'))
+    assert(doc.version === 1 && doc.providers.length === 2, 'providers.json 落盘（version 1）')
+    assert(doc.providers[1].adapter === 'commandcode-credits' && doc.providers[1].ref === 'commandcode-credits-1788142304061', 'Command Code 实例已持久化（含 vault ref）')
+
+    // 3) 模拟重启：重新挂载插件实例（新 mount 即新实例、无内存状态）→ GET 恢复
+    const m2 = mount()
+    const g1 = await m2.call('127.0.0.1', undefined, 'GET', '127.0.0.1:3080', '/api/provider-usage/providers')
+    assert(g1.ok === true && g1.exists === true && g1.providers.length === 2, '重启后 GET：清单完整恢复')
+    assert(g1.providers[1].name === 'Command Code' && g1.providers[1].source === 'vault', 'Command Code 实例跨重启存活（不再被默认清单吞掉）')
+    assert(g1.providers[0].paused === false, 'paused 字段保留')
+
+    // 4) 脏数据防御：非法 adapter / 缺 id 的条目被剔除，合法条目保留；paused 归一为布尔
+    const p2 = await m2.call('127.0.0.1', undefined, 'POST', '127.0.0.1:3080', '/api/provider-usage/providers', JSON.stringify({
+      providers: [
+        { id: 'ok-1', adapter: 'balance-json', name: 'DeepSeek', ref: 'DEEPSEEK_API_KEY', paused: 1 },
+        { id: 'bad-adapter', adapter: 'unknown-adapter', name: 'X' },
+        { adapter: 'usage-percent', name: 'no-id' },
+        'not-an-object',
+        null,
+      ],
+    }))
+    assert(p2.ok === true && p2.providers.length === 1, '脏条目剔除，合法条目保留')
+    assert(p2.providers[0].id === 'ok-1' && p2.providers[0].paused === false, '合法条目规范化（paused 严格归一为布尔，非 true 值 → false）')
+
+    // 5) 非 providers 数组的 POST 拒绝（400）
+    const p3 = await m2.call('127.0.0.1', undefined, 'POST', '127.0.0.1:3080', '/api/provider-usage/providers', JSON.stringify({ providers: 'nope' }))
+    assert(p3.ok === false && p3.error && p3.error.httpStatus === 400, 'providers 非数组 → 400')
+
+    // 6) 损坏文件：改名留证并按缺失处理，不卡死恢复流程
+    await fsxMod.writeFile(file, '{corrupt!!', 'utf8')
+    const g2 = await m2.call('127.0.0.1', undefined, 'GET', '127.0.0.1:3080', '/api/provider-usage/providers')
+    assert(g2.ok === true && g2.providers === null && g2.exists === false, '损坏文件按缺失处理（ok，不抛 500）')
+    const siblings = await fsxMod.readdir(pathMod.join(tmp, 'provider-usage'))
+    assert(siblings.some((f) => f.startsWith('providers.json.corrupt-')), '损坏文件改名 .corrupt-* 留证')
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+  }
 }
 
 if (failed > 0) { console.error('\nFAILED: ' + failed + ' 项'); process.exit(1) }

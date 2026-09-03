@@ -1,8 +1,16 @@
 # dsh-provider-usage — DSH「用量中心」
 
-> 当前版本 **v0.7.0** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
+> 当前版本 **v0.8.0** · npm `@loommii/dsh-provider-usage` · [更新历史](docs/CHANGELOG.md)
 
 DSH Web GUI 插件 **「用量中心」**：一个常驻右下角的用量卡片，实时显示你的 AI 服务用量 / 余额，不用再打开网页查；附带本地 Token 统计页，不联网也能看自己今天用了多少。
+
+## v0.8.0 更新摘要（适配 dsh 0.1.2-alpha）
+
+- **适配 dsh `0.1.2-alpha` 破坏性重构**：修复升级后「设置页无用量中心 / 卡片消失」与
+  `duplicate loader entry id` 启动崩溃（根因：v0.6.0 包名迁移时 `cordis.patch.yml` 与
+  client 注册 id 仍用旧名，叠加 alpha 新的客户端发现机制导致静默失联）
+- host 侧 API 契约、会话文件解析、平台注入（react / slots）经逐项核对在 alpha.4 全部兼容
+- 完整变更与用户升级指引见 [CHANGELOG](docs/CHANGELOG.md)
 
 ## v0.6.0 更新摘要
 
@@ -72,6 +80,10 @@ dsh plugin --profile web remove @loommii/dsh-provider-usage
 ## 使用说明
 
 - 提供方实例的增删改、Key 设置都在 **设置 → 用量中心** 里完成，改动即时生效，无需重启
+- 每个实例可在**编辑**里用「启用」开关管理状态：**开 = 启用（绿）/ 关 = 暂停（灰）**，保存后生效；
+  新添加的提供方默认启用。暂停后该实例**不再轮询查询**（卡片 30s 自动刷新跳过它），
+  卡片切换菜单里也**不可选**；暂停的若是当前卡片实例会自动切到其他启用实例，全部暂停时卡片隐藏。
+  启用/暂停只影响查询与卡片选择，编辑 / 删除 / Key 配置都原样保留
 - 设置页有两个标签：「提供方」管理实例，「用量统计」查看本地 Token 统计
 - 设置保存在本机浏览器中；删掉实例不会上传或泄露任何 Key
 - 卡片拖动后的位置会自动保存，下次打开还是老位置
